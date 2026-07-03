@@ -25,6 +25,7 @@ import time
 import queue
 import tempfile
 import shutil
+import zipfile
 import threading
 import subprocess
 import urllib.request
@@ -68,7 +69,7 @@ except Exception:  # pragma: no cover
 
 
 APP_TITLE = "TM Ripper"
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 GITHUB_REPO = "TheMannster/TM-Ripper"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -1470,16 +1471,15 @@ class DownloaderApp:
             )
             data = json.load(urllib.request.urlopen(req, timeout=15))
             tag = data.get("tag_name", "")
-            exe_url = installer_url = None
+            portable_url = installer_url = None
             for asset in data.get("assets", []):
                 name = asset.get("name", "").lower()
-                if not name.endswith(".exe"):
-                    continue
-                if "setup" in name or "install" in name:
-                    installer_url = asset.get("browser_download_url")
-                else:
-                    exe_url = asset.get("browser_download_url")
-            self.msg_queue.put(("update_check", tag, exe_url, installer_url, manual))
+                url = asset.get("browser_download_url")
+                if name.endswith(".zip"):
+                    portable_url = url  # portable build for the seamless in-app swap
+                elif name.endswith(".exe") and ("setup" in name or "install" in name):
+                    installer_url = url
+            self.msg_queue.put(("update_check", tag, portable_url, installer_url, manual))
         except Exception as exc:  # noqa: BLE001
             self.msg_queue.put(("update_check_err", str(exc), manual))
 
@@ -1497,7 +1497,7 @@ class DownloaderApp:
         except OSError:
             return False
 
-    def _handle_update_check(self, tag, exe_url, installer_url, manual):
+    def _handle_update_check(self, tag, portable_url, installer_url, manual):
         if not (tag and is_newer_version(tag, APP_VERSION)):
             self.status_var.set(f"You're up to date (v{APP_VERSION}).")
             if manual:
@@ -1507,7 +1507,7 @@ class DownloaderApp:
         if manual:
             self.status_var.set("Update available.")
 
-        can_swap = bool(exe_url) and self._install_dir_writable()
+        can_swap = bool(portable_url) and self._install_dir_writable()
         if not can_swap and not installer_url:
             self._alert(
                 APP_TITLE,
@@ -1528,7 +1528,7 @@ class DownloaderApp:
             return
 
         if can_swap:
-            self._start_update_download(exe_url, mode="swap")
+            self._start_update_download(portable_url, mode="swap")
         else:
             self._start_update_download(installer_url, mode="installer")
 
@@ -1545,7 +1545,7 @@ class DownloaderApp:
     def _download_update_worker(self, url: str, mode: str):
         try:
             if mode == "swap":
-                dest = os.path.join(os.path.dirname(sys.executable), "TM Ripper.new.exe")
+                dest = os.path.join(tempfile.gettempdir(), "TMRipper-portable.zip")
             else:
                 dest = os.path.join(tempfile.gettempdir(), "TMRipper-Setup.exe")
             with urllib.request.urlopen(
@@ -1565,22 +1565,41 @@ class DownloaderApp:
         except Exception as exc:  # noqa: BLE001
             self.msg_queue.put(("update_err", str(exc)))
 
-    def _apply_exe_update(self, new_path: str):
-        """Swap the freshly downloaded exe in place; no installer needed."""
+    def _apply_exe_update(self, zip_path: str):
+        """Extract the portable build and swap it in place; no installer needed."""
         exe = sys.executable
+        folder = os.path.dirname(exe)
+        new_exe = os.path.join(folder, "TM Ripper.new.exe")
         old = exe + ".old"
         try:
+            with zipfile.ZipFile(zip_path) as z:
+                inner = next((n for n in z.namelist() if n.lower().endswith(".exe")), None)
+                if not inner:
+                    raise OSError("No application found inside the update package.")
+                with z.open(inner) as src, open(new_exe, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
             if os.path.exists(old):
                 os.remove(old)
             os.rename(exe, old)          # move the running exe aside (allowed on Windows)
-            shutil.move(new_path, exe)   # put the new build in its place
+            os.rename(new_exe, exe)      # put the new build in its place
         except OSError as exc:
+            for leftover in (new_exe,):
+                try:
+                    if os.path.exists(leftover):
+                        os.remove(leftover)
+                except OSError:
+                    pass
             self._log(f"Could not apply update in place: {exc}", error=True)
             self.is_busy = False
             self._update_action_buttons()
             self._alert(APP_TITLE, f"Couldn't apply the update automatically:\n\n{exc}",
                         kind="error")
             return
+        finally:
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
 
         self.is_busy = False
         self._update_action_buttons()
@@ -1691,8 +1710,8 @@ class DownloaderApp:
                     else:
                         self._notify("yt-dlp update failed:\n" + summary, "error", duration=6000)
                 elif kind == "update_check":
-                    _, tag, exe_url, installer_url, manual = msg
-                    self._handle_update_check(tag, exe_url, installer_url, manual)
+                    _, tag, portable_url, installer_url, manual = msg
+                    self._handle_update_check(tag, portable_url, installer_url, manual)
                 elif kind == "update_check_err":
                     _, err, manual = msg
                     self._log("Update check failed: " + err, error=True)
