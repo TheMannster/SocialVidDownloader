@@ -1,0 +1,17 @@
+# <type>: <summary>   (max ~50 chars, imperative mood, no trailing period)
+#
+# Types: feat | fix | docs | refactor | build | chore | test
+#
+# Example summary:  feat: add batch download queue
+#
+# ---- blank line above, then a description that explains WHY ----
+#
+# - What changed and why (wrap at ~72 chars)
+# - Any trade-offs, side effects, or follow-ups
+#
+# Example:
+# feat: add Stop button to cancel downloads
+#
+# Lets users abort an in-progress download via yt-dlp's DownloadCancelled
+# hook instead of waiting for it to finish. The button stays disabled
+# until a download is running.
