@@ -1,4 +1,4 @@
-' Silent launcher for Social Video Downloader.
+' Silent launcher for TM Ripper.
 ' Runs the app with pythonw so NO console/CMD window ever appears.
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")

@@ -1,9 +1,9 @@
 @echo off
 REM ============================================================
-REM  Build the full Windows installer for Social Video Downloader
+REM  Build the full Windows installer for TM Ripper
 REM  1) builds the app .exe with PyInstaller
 REM  2) compiles the Setup.exe with Inno Setup
-REM  Output: installer_output\SocialVideoDownloader-Setup.exe
+REM  Output: installer_output\TMRipper-Setup.exe
 REM ============================================================
 cd /d "%~dp0"
 
@@ -16,11 +16,12 @@ py make_icon.py
 
 echo [3/4] Building app executable...
 py -m PyInstaller --noconfirm --onefile --windowed ^
-  --name "Social Video Downloader" ^
+  --name "TM Ripper" ^
   --icon "assets\icon.ico" ^
   --add-data "assets;assets" ^
   --collect-all tkinterdnd2 ^
   --collect-all yt_dlp ^
+  --collect-all pypresence ^
   app.py
 
 echo [4/4] Compiling installer with Inno Setup...
@@ -30,8 +31,8 @@ if not exist "%ISCC%" set "ISCC=ISCC.exe"
 "%ISCC%" installer.iss
 
 echo.
-if exist "installer_output\SocialVideoDownloader-Setup.exe" (
-    echo SUCCESS - installer is at:  installer_output\SocialVideoDownloader-Setup.exe
+if exist "installer_output\TMRipper-Setup.exe" (
+    echo SUCCESS - installer is at:  installer_output\TMRipper-Setup.exe
 ) else (
     echo Installer build failed. Check the messages above.
 )

@@ -1,13 +1,13 @@
-; Inno Setup script for Social Video Downloader
+; Inno Setup script for TM Ripper
 ; Builds a proper Windows installer (Setup.exe) with Start Menu +
 ; optional Desktop shortcuts, an uninstaller, and bundled ffmpeg.
 ;
 ; Compile with:  ISCC installer.iss   (or run build_installer.bat)
 
-#define MyAppName "Social Video Downloader"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "Corde"
-#define MyAppExeName "Social Video Downloader.exe"
+#define MyAppName "TM Ripper"
+#define MyAppVersion "1.1.0"
+#define MyAppPublisher "TheMannster"
+#define MyAppExeName "TM Ripper.exe"
 
 [Setup]
 AppId={{9F3B6E1A-2C4D-4E7B-9A1F-5D6C8B2E7A10}
@@ -18,7 +18,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=installer_output
-OutputBaseFilename=SocialVideoDownloader-Setup
+OutputBaseFilename=TMRipper-Setup
 SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
@@ -27,6 +27,10 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Install per-user by default so no admin prompt is required.
 PrivilegesRequiredOverridesAllowed=dialog
+; Auto-close a running copy during updates so files can be replaced.
+CloseApplications=yes
+CloseApplicationsFilter=*.exe
+AppMutex=TMRipperRunningMutex
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

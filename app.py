@@ -1,6 +1,6 @@
 """
-Social Video Downloader
-------------------------
+TM Ripper  (by TheMannster)
+---------------------------
 A desktop GUI to download videos from TikTok, Instagram Reels, Facebook Reels,
 and YouTube Shorts by pasting (or dropping) a link.
 
@@ -21,7 +21,9 @@ import os
 import re
 import sys
 import json
+import time
 import queue
+import tempfile
 import threading
 import subprocess
 import urllib.request
@@ -53,8 +55,22 @@ except Exception:  # pragma: no cover
     DND_TEXT = DND_FILES = None
     _DND_AVAILABLE = False
 
+try:
+    from pypresence import Presence
+except Exception:  # pragma: no cover
+    Presence = None
 
-APP_TITLE = "Social Video Downloader"
+
+APP_TITLE = "TM Ripper"
+APP_VERSION = "1.1.0"
+GITHUB_REPO = "TheMannster/SocialVidDownloader"
+RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+# Discord Rich Presence. Create an app at https://discord.com/developers/applications
+# then paste its Application (Client) ID here. Upload the logo under
+# "Rich Presence > Art Assets" with the key name "tm_logo". Leave "" to disable.
+DISCORD_CLIENT_ID = os.environ.get("TMRIPPER_DISCORD_ID", "1522693674503241968")
+DISCORD_LARGE_IMAGE = "tm_logo"
 DEFAULT_DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 
 if getattr(sys, "frozen", False):
@@ -62,7 +78,7 @@ if getattr(sys, "frozen", False):
     BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))  # bundled assets
     APP_DIR = os.path.dirname(sys.executable)  # install dir (ffmpeg lives here)
     # Settings go to %APPDATA% since Program Files isn't user-writable.
-    CONFIG_DIR = os.path.join(os.environ.get("APPDATA") or APP_DIR, "SocialVideoDownloader")
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA") or APP_DIR, "TMRipper")
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
@@ -116,10 +132,15 @@ WIN95_FONT_BOLD = ("MS Sans Serif", 8, "bold")
 WIN95_TITLE_FONT = ("MS Sans Serif", 11, "bold")
 WIN95_MONO = ("Courier New", 8)
 
-# --- Modern (legacy) palette -------------------------------------------
-PRIMARY = "#4f46e5"
-PRIMARY_ACTIVE = "#4338ca"
-BG_LEGACY = "#f4f4f6"
+# --- Modern (legacy) palette : dark grey, easy on the eyes --------------
+PRIMARY = "#dc2626"         # TM crimson
+PRIMARY_ACTIVE = "#ef4444"  # brighter crimson (hover/pressed)
+BG_LEGACY = "#2b2d31"       # main dark grey
+SURFACE_LEGACY = "#1e1f22"  # darker surface (cards, inputs, log)
+BTN_LEGACY = "#3a3d43"      # neutral button face
+BTN_LEGACY_ACTIVE = "#4a4e55"
+TEXT_LEGACY = "#dbdee1"     # primary light text
+SUBTEXT_LEGACY = "#9aa0a6"  # muted text
 
 
 def load_settings() -> dict:
@@ -136,6 +157,20 @@ def save_settings(data: dict) -> None:
             json.dump(data, fh, indent=2)
     except OSError:
         pass
+
+
+def parse_version(v: str) -> tuple:
+    """Turn 'v1.2.3' / '1.2.3' into a comparable tuple (1, 2, 3)."""
+    v = (v or "").strip().lstrip("vV")
+    parts = []
+    for chunk in v.split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) if parts else (0,)
+
+
+def is_newer_version(remote: str, local: str) -> bool:
+    return parse_version(remote) > parse_version(local)
 
 
 def detect_platform(url: str) -> str:
@@ -235,6 +270,58 @@ class ModernProgress(ttk.Progressbar):
         self.config(value=value)
 
 
+class DiscordRP:
+    """Thin wrapper around pypresence so TM Ripper shows as a Discord activity.
+
+    Safe no-op if pypresence is missing, no client ID is set, or Discord isn't
+    running. All calls should be made from the main thread except connect().
+    """
+
+    def __init__(self, client_id: str):
+        self.client_id = client_id
+        self.rpc = None
+        self.connected = False
+        self.start_ts = int(time.time())
+
+    def connect(self):
+        if not Presence or not self.client_id:
+            return
+        try:
+            self.rpc = Presence(self.client_id)
+            self.rpc.connect()
+            self.connected = True
+            self.set_idle()
+        except Exception:
+            self.connected = False
+            self.rpc = None
+
+    def _safe_update(self, **kwargs):
+        if not self.connected or not self.rpc:
+            return
+        try:
+            self.rpc.update(start=self.start_ts, large_image=DISCORD_LARGE_IMAGE,
+                            large_text=f"{APP_TITLE} v{APP_VERSION}", **kwargs)
+        except Exception:
+            self.connected = False
+
+    def set_idle(self):
+        self._safe_update(state="Idle", details="Ready to rip")
+
+    def set_downloading(self, platform: str):
+        self._safe_update(state=f"Ripping a {platform} video", details="Downloading")
+
+    def set_preview(self):
+        self._safe_update(state="Previewing a video", details="Browsing")
+
+    def close(self):
+        try:
+            if self.rpc:
+                self.rpc.close()
+        except Exception:
+            pass
+        self.connected = False
+
+
 class DownloaderApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -267,9 +354,23 @@ class DownloaderApp:
         self.url_var.trace_add("write", self._on_url_change)
 
         self.log_history: list[tuple[str, bool]] = []
+        self._update_checked = False
+
+        # Discord Rich Presence (shows the app as a game activity).
+        self.discord = DiscordRP(DISCORD_CLIENT_ID)
+        threading.Thread(target=self.discord.connect, daemon=True).start()
 
         self._build_all()
         self._poll_queue()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Auto-check GitHub for a newer release shortly after launch (installed builds only).
+        if getattr(sys, "frozen", False):
+            self.root.after(1500, lambda: self._check_app_updates(manual=False))
+
+    def _on_close(self):
+        self.discord.close()
+        self.root.destroy()
 
     # --------------------------------------------------------------- Icon
     def _apply_window_icon(self):
@@ -343,7 +444,8 @@ class DownloaderApp:
         menubar.add_cascade(label="Settings", menu=settings_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(label="Update downloader (yt-dlp)", command=self._update_downloader)
+        tools_menu.add_command(label="Check for updates...", command=lambda: self._check_app_updates(manual=True))
+        tools_menu.add_command(label="Update video engine (yt-dlp)", command=self._update_downloader)
         menubar.add_cascade(label="Tools", menu=tools_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -355,7 +457,7 @@ class DownloaderApp:
     def _about(self):
         messagebox.showinfo(
             "About " + APP_TITLE,
-            APP_TITLE + "\n\nDownloads TikTok, Instagram Reels, Facebook Reels,\n"
+            APP_TITLE + " by TheMannster\n\nDownloads TikTok, Instagram Reels, Facebook Reels,\n"
             "and YouTube Shorts.\n\nPowered by yt-dlp.",
         )
 
@@ -417,7 +519,7 @@ class DownloaderApp:
 
         banner = tk.Frame(outer, bg=NAVY, bd=0)
         banner.pack(fill="x")
-        tk.Label(banner, text="  Social Video Downloader", bg=NAVY, fg="white",
+        tk.Label(banner, text="  TM Ripper", bg=NAVY, fg="white",
                  font=WIN95_TITLE_FONT, anchor="w").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Label(banner, text="TikTok  Instagram  Facebook  YouTube  ", bg=NAVY, fg="#c0c0c0",
                  font=WIN95_FONT, anchor="e").pack(side="right", ipady=3)
@@ -501,9 +603,12 @@ class DownloaderApp:
         scroll.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=scroll.set, state="disabled")
 
-        status = tk.Label(self.root, textvariable=self.status_var, bg=FACE, fg="#000000",
-                          font=WIN95_FONT, relief="sunken", bd=1, anchor="w", padx=6)
-        status.pack(side="bottom", fill="x")
+        statusbar = tk.Frame(self.root, bg=FACE)
+        statusbar.pack(side="bottom", fill="x")
+        tk.Label(statusbar, text=f"v{APP_VERSION}", bg=FACE, fg="#000000", font=WIN95_FONT,
+                 relief="sunken", bd=1, anchor="e", padx=8).pack(side="right")
+        tk.Label(statusbar, textvariable=self.status_var, bg=FACE, fg="#000000", font=WIN95_FONT,
+                 relief="sunken", bd=1, anchor="w", padx=6).pack(side="left", fill="x", expand=True)
 
         if yt_dlp is None:
             self._log("yt-dlp is not installed. Run:  pip install -r requirements.txt", error=True)
@@ -515,21 +620,49 @@ class DownloaderApp:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TButton", padding=8, font=("Segoe UI", 10))
+        style.configure("TButton", padding=8, font=("Segoe UI", 10),
+                        background=BTN_LEGACY, foreground=TEXT_LEGACY, borderwidth=0)
+        style.map("TButton",
+                  background=[("active", BTN_LEGACY_ACTIVE), ("disabled", "#2f3136")],
+                  foreground=[("disabled", "#6b6f76")])
         style.configure("Accent.TButton", padding=10, font=("Segoe UI", 11, "bold"),
-                        foreground="white", background=PRIMARY)
-        style.map("Accent.TButton", background=[("active", PRIMARY_ACTIVE)])
-        style.configure("TLabel", font=("Segoe UI", 10), background=BG_LEGACY)
+                        foreground="white", background=PRIMARY, borderwidth=0)
+        style.map("Accent.TButton",
+                  background=[("active", PRIMARY_ACTIVE), ("disabled", "#5a2222")],
+                  foreground=[("disabled", "#c9a3a3")])
+        style.configure("TLabel", font=("Segoe UI", 10), background=BG_LEGACY, foreground=TEXT_LEGACY)
         style.configure("TFrame", background=BG_LEGACY)
-        style.configure("Card.TFrame", background="#ffffff")
-        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"), background=BG_LEGACY)
-        style.configure("Sub.TLabel", font=("Segoe UI", 9), foreground="#666", background=BG_LEGACY)
-        style.configure("Meta.TLabel", font=("Segoe UI", 9), background="#ffffff")
+        style.configure("Card.TFrame", background=SURFACE_LEGACY)
+        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"),
+                        background=BG_LEGACY, foreground="#ffffff")
+        style.configure("Sub.TLabel", font=("Segoe UI", 9),
+                        foreground=SUBTEXT_LEGACY, background=BG_LEGACY)
+        style.configure("Meta.TLabel", font=("Segoe UI", 9),
+                        background=SURFACE_LEGACY, foreground=TEXT_LEGACY)
+        # Inputs
+        style.configure("TEntry", fieldbackground=SURFACE_LEGACY, foreground=TEXT_LEGACY,
+                        insertcolor=TEXT_LEGACY, bordercolor="#111", lightcolor=SURFACE_LEGACY,
+                        darkcolor=SURFACE_LEGACY)
+        style.configure("TCombobox", fieldbackground=SURFACE_LEGACY, background=BTN_LEGACY,
+                        foreground=TEXT_LEGACY, arrowcolor=TEXT_LEGACY, bordercolor="#111")
+        style.map("TCombobox", fieldbackground=[("readonly", SURFACE_LEGACY)],
+                  foreground=[("readonly", TEXT_LEGACY)])
+        # Combobox dropdown list colors
+        self.root.option_add("*TCombobox*Listbox.background", SURFACE_LEGACY)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT_LEGACY)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", PRIMARY)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        # Progress bar
+        style.configure("Horizontal.TProgressbar", background=PRIMARY, troughcolor=SURFACE_LEGACY,
+                        bordercolor=SURFACE_LEGACY, lightcolor=PRIMARY, darkcolor=PRIMARY)
+        # Scrollbar
+        style.configure("TScrollbar", background=BTN_LEGACY, troughcolor=BG_LEGACY,
+                        arrowcolor=TEXT_LEGACY, bordercolor=BG_LEGACY)
 
         container = ttk.Frame(self.root, padding=20)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="Social Video Downloader", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(container, text="TM Ripper", style="Header.TLabel").pack(anchor="w")
         ttk.Label(container,
                   text="Download TikTok  \u2022  Instagram Reels  \u2022  Facebook Reels  \u2022  YouTube Shorts",
                   style="Sub.TLabel").pack(anchor="w", pady=(0, 15))
@@ -552,8 +685,8 @@ class DownloaderApp:
 
         prev_card = ttk.Frame(container, style="Card.TFrame", padding=10)
         prev_card.pack(fill="x", pady=(0, 12))
-        self.thumb_label = tk.Label(prev_card, bg="#ffffff", text="(no preview)", fg="#999",
-                                    font=("Segoe UI", 9), width=30, height=6)
+        self.thumb_label = tk.Label(prev_card, bg=SURFACE_LEGACY, text="(no preview)",
+                                    fg=SUBTEXT_LEGACY, font=("Segoe UI", 9), width=30, height=6)
         self.thumb_label.pack(side="left", padx=(0, 12))
         self.meta_label = ttk.Label(prev_card, text="", style="Meta.TLabel", justify="left",
                                     anchor="nw", wraplength=340)
@@ -597,12 +730,18 @@ class DownloaderApp:
         ttk.Label(container, text="Log").pack(anchor="w")
         log_frame = ttk.Frame(container)
         log_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.log = tk.Text(log_frame, height=6, wrap="word", font=("Consolas", 9))
-        self.log.configure(bg="#1e1e2e", fg="#cdd6f4", insertbackground="#cdd6f4")
+        self.log = tk.Text(log_frame, height=6, wrap="word", font=("Consolas", 9),
+                           relief="flat", bd=0)
+        self.log.configure(bg=SURFACE_LEGACY, fg=TEXT_LEGACY, insertbackground=TEXT_LEGACY)
         self.log.pack(side="left", fill="both", expand=True)
         scroll = ttk.Scrollbar(log_frame, command=self.log.yview)
         scroll.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=scroll.set, state="disabled")
+
+        footer = ttk.Frame(container)
+        footer.pack(fill="x", pady=(6, 0))
+        ttk.Label(footer, text=f"TM Ripper v{APP_VERSION}  \u2022  by TheMannster",
+                  style="Sub.TLabel").pack(side="right")
 
         if yt_dlp is None:
             self._log("yt-dlp is not installed. Run:  pip install -r requirements.txt", error=True)
@@ -731,6 +870,7 @@ class DownloaderApp:
         self._update_action_buttons()
         self.status_var.set("Fetching preview...")
         self.meta_label.config(text="Loading...")
+        self.discord.set_preview()
         threading.Thread(target=self._preview_worker, args=(url,), daemon=True).start()
 
     def _preview_worker(self, url: str):
@@ -803,6 +943,7 @@ class DownloaderApp:
         self.progress.set(0)
         self.status_var.set("Starting...")
         self._log(f"Downloading from {detect_platform(url)}: {url}")
+        self.discord.set_downloading(detect_platform(url))
 
         threading.Thread(target=self._download_worker, args=(url, folder, self.quality_var.get()),
                          daemon=True).start()
@@ -876,6 +1017,97 @@ class DownloaderApp:
         except Exception as exc:  # noqa: BLE001
             self.msg_queue.put(("error", str(exc)))
 
+    # ------------------------------------------------- App auto-updater
+    def _check_app_updates(self, manual=False):
+        if self._update_checked and not manual:
+            return
+        self._update_checked = True
+        if manual:
+            self.status_var.set("Checking for updates...")
+        threading.Thread(target=self._update_check_worker, args=(manual,), daemon=True).start()
+
+    def _update_check_worker(self, manual: bool):
+        try:
+            req = urllib.request.Request(
+                RELEASES_API_URL,
+                headers={"User-Agent": "TMRipper", "Accept": "application/vnd.github+json"},
+            )
+            data = json.load(urllib.request.urlopen(req, timeout=15))
+            tag = data.get("tag_name", "")
+            asset_url = None
+            for asset in data.get("assets", []):
+                if asset.get("name", "").lower().endswith(".exe"):
+                    asset_url = asset.get("browser_download_url")
+                    break
+            self.msg_queue.put(("update_check", tag, asset_url, manual))
+        except Exception as exc:  # noqa: BLE001
+            self.msg_queue.put(("update_check_err", str(exc), manual))
+
+    def _handle_update_check(self, tag, asset_url, manual):
+        if tag and is_newer_version(tag, APP_VERSION):
+            if manual:
+                self.status_var.set("Update available.")
+            if not asset_url:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    f"A new version ({tag}) is available on GitHub, but no installer "
+                    "was attached to the release.",
+                )
+                return
+            answer = messagebox.askyesno(
+                APP_TITLE,
+                f"A new version of {APP_TITLE} is available!\n\n"
+                f"    You have:  v{APP_VERSION}\n"
+                f"    Latest:      {tag}\n\n"
+                "Download and install it now?",
+            )
+            if answer:
+                self._download_and_run_installer(asset_url)
+        else:
+            self.status_var.set(f"You're up to date (v{APP_VERSION}).")
+            if manual:
+                messagebox.showinfo(APP_TITLE, f"You're on the latest version (v{APP_VERSION}).")
+
+    def _download_and_run_installer(self, url: str):
+        if self.is_busy:
+            return
+        self.is_busy = True
+        self._update_action_buttons()
+        self.status_var.set("Downloading update...")
+        self._log(f"Downloading update from {url}")
+        threading.Thread(target=self._download_installer_worker, args=(url,), daemon=True).start()
+
+    def _download_installer_worker(self, url: str):
+        try:
+            dest = os.path.join(tempfile.gettempdir(), "TMRipper-Setup.exe")
+            with urllib.request.urlopen(
+                urllib.request.Request(url, headers={"User-Agent": "TMRipper"}), timeout=60
+            ) as resp, open(dest, "wb") as fh:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                while True:
+                    chunk = resp.read(1024 * 256)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    pct = (done / total * 100) if total else 0
+                    self.msg_queue.put(("progress", pct, f"Downloading update... {pct:.0f}%"))
+            self.msg_queue.put(("update_ready", dest))
+        except Exception as exc:  # noqa: BLE001
+            self.msg_queue.put(("update_err", str(exc)))
+
+    def _launch_installer_and_quit(self, path: str):
+        self._log("Launching installer; the app will close to finish updating.")
+        try:
+            self._os_open(path)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror(APP_TITLE, f"Could not launch installer:\n{exc}")
+            self.is_busy = False
+            self._update_action_buttons()
+            return
+        self.root.after(600, self.root.destroy)
+
     # ----------------------------------------------------- Update yt-dlp
     def _update_downloader(self):
         if self.is_downloading or self.is_busy:
@@ -935,6 +1167,7 @@ class DownloaderApp:
                     self.is_busy = False
                     self._show_preview(meta, img)
                     self._update_action_buttons()
+                    self.discord.set_idle()
                 elif kind == "preview_error":
                     _, err = msg
                     self.is_busy = False
@@ -942,6 +1175,7 @@ class DownloaderApp:
                     self.status_var.set("Preview failed.")
                     self._log("Preview failed: " + err, error=True)
                     self._update_action_buttons()
+                    self.discord.set_idle()
                 elif kind == "update_done":
                     _, ok, summary = msg
                     self.is_busy = False
@@ -953,6 +1187,27 @@ class DownloaderApp:
                         ("yt-dlp updated.\nRestart the app to use the new version."
                          if ok else "Update failed:\n\n" + summary),
                     )
+                elif kind == "update_check":
+                    _, tag, asset_url, manual = msg
+                    self._handle_update_check(tag, asset_url, manual)
+                elif kind == "update_check_err":
+                    _, err, manual = msg
+                    self._log("Update check failed: " + err, error=True)
+                    if manual:
+                        self.status_var.set("Update check failed.")
+                        messagebox.showwarning(APP_TITLE, "Couldn't check for updates:\n\n" + err)
+                elif kind == "update_ready":
+                    _, path = msg
+                    self.progress.set(100)
+                    self.status_var.set("Update downloaded. Launching installer...")
+                    self._launch_installer_and_quit(path)
+                elif kind == "update_err":
+                    _, err = msg
+                    self.is_busy = False
+                    self.status_var.set("Update failed.")
+                    self._log("Update download failed: " + err, error=True)
+                    self._update_action_buttons()
+                    messagebox.showerror(APP_TITLE, "Update download failed:\n\n" + err)
         except queue.Empty:
             pass
         self.root.after(100, self._poll_queue)
@@ -962,9 +1217,22 @@ class DownloaderApp:
         text = "Download" if self.theme == THEME_RETRO else "\u2b07  Download"
         self.download_btn.config(text=text)
         self._update_action_buttons()
+        self.discord.set_idle()
+
+
+def _create_app_mutex():
+    """Named mutex so the installer's AppMutex can detect a running copy."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CreateMutexW(None, False, "TMRipperRunningMutex")
+        except Exception:
+            pass
 
 
 def main():
+    _create_app_mutex()
     if _DND_AVAILABLE:
         root = TkinterDnD.Tk()
     else:

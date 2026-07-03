@@ -1,9 +1,20 @@
-# Social Video Downloader
+# TM Ripper
 
-A simple desktop app (GUI) to download videos from **TikTok**, **Instagram Reels**,
+**by TheMannster**
+
+A desktop app (GUI) to download videos from **TikTok**, **Instagram Reels**,
 **Facebook Reels**, and **YouTube Shorts** by pasting a link.
 
 Built with Python + `tkinter` (GUI) and [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (downloader).
+
+## Download
+
+**[⬇ Download the latest installer](https://github.com/TheMannster/SocialVidDownloader/releases/latest/download/TMRipper-Setup.exe)**
+&nbsp; or browse [all releases](https://github.com/TheMannster/SocialVidDownloader/releases/latest).
+
+Run the installer — no Python or ffmpeg needed, it's all bundled. Installs
+per-user (no admin prompt). Since the app isn't code-signed, Windows SmartScreen
+may warn on first run: click **More info → Run anyway**.
 
 ## Features
 
@@ -64,19 +75,19 @@ works with zero setup):
    static Windows build from https://www.gyan.dev/ffmpeg/builds/). These are not
    committed to the repo because of their size.
 3. Double-click **`build_installer.bat`**.
-4. The finished installer appears at **`installer_output\SocialVideoDownloader-Setup.exe`**.
+4. The finished installer appears at **`installer_output\TMRipper-Setup.exe`**.
 
 Give that single `Setup.exe` to anyone — they run it, click through the wizard,
 and get a fully working app (ffmpeg included, no Python needed). It installs
 per-user by default, so no admin prompt is required. Preferences are stored in
-`%APPDATA%\SocialVideoDownloader`.
+`%APPDATA%\TMRipper`.
 
 ## Build just a portable .exe (no installer)
 
 To create a single portable `.exe` instead:
 
 1. Double-click **`build_exe.bat`**.
-2. The finished app appears at **`dist\Social Video Downloader.exe`**.
+2. The finished app appears at **`dist\TM Ripper.exe`**.
 
 The app auto-detects a bundled `ffmpeg`/`ffprobe` sitting next to it (or in a
 `vendor\ffmpeg` folder), and otherwise falls back to any `ffmpeg` on the PATH.
