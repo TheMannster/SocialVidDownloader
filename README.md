@@ -60,8 +60,11 @@ desktop shortcut, an entry in Add/Remove Programs, and a bundled ffmpeg so it
 works with zero setup):
 
 1. Install [Inno Setup](https://jrsoftware.org/isdl.php) once (`winget install JRSoftware.InnoSetup`).
-2. Double-click **`build_installer.bat`**.
-3. The finished installer appears at **`installer_output\SocialVideoDownloader-Setup.exe`**.
+2. Put `ffmpeg.exe` and `ffprobe.exe` in a `vendor\ffmpeg\` folder (download a
+   static Windows build from https://www.gyan.dev/ffmpeg/builds/). These are not
+   committed to the repo because of their size.
+3. Double-click **`build_installer.bat`**.
+4. The finished installer appears at **`installer_output\SocialVideoDownloader-Setup.exe`**.
 
 Give that single `Setup.exe` to anyone — they run it, click through the wizard,
 and get a fully working app (ffmpeg included, no Python needed). It installs
