@@ -9,8 +9,8 @@ Built with Python + `tkinter` (GUI) and [`yt-dlp`](https://github.com/yt-dlp/yt-
 
 ## Download
 
-**[⬇ Download the latest installer](https://github.com/TheMannster/SocialVidDownloader/releases/latest/download/TMRipper-Setup.exe)**
-&nbsp; or browse [all releases](https://github.com/TheMannster/SocialVidDownloader/releases/latest).
+**[⬇ Download the latest installer](https://github.com/TheMannster/TM-Ripper/releases/latest/download/TMRipper-Setup.exe)**
+&nbsp; or browse [all releases](https://github.com/TheMannster/TM-Ripper/releases/latest).
 
 Run the installer — no Python or ffmpeg needed, it's all bundled. Installs
 per-user (no admin prompt). Since the app isn't code-signed, Windows SmartScreen

@@ -62,8 +62,8 @@ except Exception:  # pragma: no cover
 
 
 APP_TITLE = "TM Ripper"
-APP_VERSION = "1.1.0"
-GITHUB_REPO = "TheMannster/SocialVidDownloader"
+APP_VERSION = "1.1.1"
+GITHUB_REPO = "TheMannster/TM-Ripper"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 # Discord Rich Presence. Create an app at https://discord.com/developers/applications
